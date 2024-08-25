@@ -12,12 +12,17 @@ export ActorCritic
     ActorCritic(;actor, critic, optimizer=Adam())
 The `actor` part must return logits (*Do not use softmax in the last layer!*), and the `critic` part must return a state value.
 """
-Base.@kwdef struct ActorCritic{A,C,O}
+Base.@kwdef struct ActorCritic{A,C}
     actor::A
     critic::C
 end
 
 Flux.@layer ActorCritic
+
+function RLBase.optimise!(AC::FluxApproximator{<:ActorCritic}, grad:: NamedTuple)
+    Flux.Optimise.update!(AC.optimiser_state.actor, AC.model.actor, grad.model.actor)
+    Flux.Optimise.update!(AC.optimiser_state.critic, AC.model.critic, grad.model.critic)
+end
 
 #####
 # GaussianNetwork
@@ -30,7 +35,7 @@ export GaussianNetwork
 
 Returns `μ` and `σ` when called.  Create a distribution to sample from using
 `Normal.(μ, σ)`. `min_σ` and `max_σ` are used to clip the output from
-`σ`. `pre` is a shared body before the two heads of the NN. σ should be > 0. 
+`σ`. `pre` is a shared body before the two heads of the NN. σ should be > 0.
 You may enforce this using a `softplus` output activation. The `squash` function is
 applied elementwise to the action. If squash is `tanh`, a correction is applied to the
 logpdf. Other squashing functions are not supported except for identity.
@@ -58,7 +63,7 @@ Flux.@layer GaussianNetwork
 This function is compatible with a multidimensional action space.
 
 - `rng::AbstractRNG=Random.default_rng()`
-- `is_sampling::Bool=false`, whether to sample from the obtained normal distribution. 
+- `is_sampling::Bool=false`, whether to sample from the obtained normal distribution.
 - `is_return_log_prob::Bool=false`, whether to calculate the conditional probability of getting actions in the given state.
 """
 function (model::GaussianNetwork)(rng::AbstractRNG, s; is_sampling::Bool=false, is_return_log_prob::Bool=false)
@@ -127,7 +132,7 @@ export SoftGaussianNetwork
 Like `GaussianNetwork` but with a differentiable reparameterization trick. Mainly used for
 SAC. Returns `μ` and `σ` when called.  Create a distribution to sample from using
 `Normal.(μ, σ)`. `min_σ` and `max_σ` are used to clip the output from
-`σ`. `pre` is a shared body before the two heads of the NN. σ should be > 0. 
+`σ`. `pre` is a shared body before the two heads of the NN. σ should be > 0.
 You may enforce this using a `softplus` output activation. Actions are squashed by a tanh
 and a correction is applied to the logpdf.
 """
@@ -147,7 +152,7 @@ Flux.@layer SoftGaussianNetwork
 This function is compatible with a multidimensional action space.
 
 - `rng::AbstractRNG=Random.default_rng()`
-- `is_sampling::Bool=false`, whether to sample from the obtained normal distribution. 
+- `is_sampling::Bool=false`, whether to sample from the obtained normal distribution.
 - `is_return_log_prob::Bool=false`, whether to calculate the conditional probability of getting actions in the given state.
 """
 function (model::SoftGaussianNetwork)(rng::AbstractRNG, s; is_sampling::Bool=false, is_return_log_prob::Bool=false)
@@ -231,7 +236,7 @@ Flux.@layer CovGaussianNetwork
 
 This function is compatible with a multidimensional action space. To work with covariance matrices, the outputs are 3D tensors.  If
 sampling, return an actions tensor with dimensions `(action_size x action_samples
-x batchsize)` and a `logp_π` tensor with dimensions `(1 x action_samples x batchsize)`. 
+x batchsize)` and a `logp_π` tensor with dimensions `(1 x action_samples x batchsize)`.
 If not sampling, returns `μ`
 with dimensions `(action_size x 1 x batchsize)` and `L`, the lower triangular of
 the cholesky decomposition of the covariance matrix, with dimensions
@@ -240,7 +245,7 @@ retrieved with `Σ = stack(map(l -> l*l', eachslice(L, dims=3)); dims=3)`
 
 - `rng::AbstractRNG=Random.default_rng()`
 - `is_sampling::Bool=false`, whether to sample from the obtained normal
-  distribution. 
+  distribution.
 - `is_return_log_prob::Bool=false`, whether to calculate the conditional
   probability of getting actions in the given state.
 """
@@ -273,7 +278,7 @@ end
 
 """
     (model::CovGaussianNetwork)(rng::AbstractRNG, state::AbstractMatrix; is_sampling::Bool=false, is_return_log_prob::Bool=false)
-    
+
 Given a Matrix of states, will return actions, μ and logpdf in matrix format. The batch of Σ remains a 3D tensor.
 """
 function (model::CovGaussianNetwork)(rng::AbstractRNG, state::AbstractVecOrMat; is_sampling::Bool=false, is_return_log_prob::Bool=false)
@@ -317,7 +322,7 @@ end
 
 """
     (model::CovGaussianNetwork)(state::AbstractArray, action::AbstractArray)
-    
+
 Return the logpdf of the model sampling `action` when in `state`.  State must be
 a 3D tensor with dimensions `(state_size x 1 x batchsize)`.  Multiple actions may
 be taken per state, `action` must have dimensions `(action_size x
@@ -376,7 +381,7 @@ end
 Transform a vector containing the non-zero elements of a lower triangular da x da matrix into that matrix.
 """
 function vec_to_tril(cholesky_vec, da)
-    batchsize = size(cholesky_vec, 3)    
+    batchsize = size(cholesky_vec, 3)
     return mapreduce(j->cholesky_columns(cholesky_vec, j, batchsize, da), hcat, 1:da)
 end
 
@@ -389,14 +394,14 @@ export CategoricalNetwork
 """
     CategoricalNetwork(model)([rng,] state::AbstractArray [, mask::AbstractArray{Bool}]; is_sampling::Bool=false, is_return_log_prob::Bool = false)
 
-CategoricalNetwork wraps a model (typically a neural network) that takes a `state` input 
+CategoricalNetwork wraps a model (typically a neural network) that takes a `state` input
 and outputs logits for a categorical distribution. The optional argument `mask` must be
 an Array of `Bool` with the same size as `state` expect for the first dimension that must
-have the length of the action vector. Actions mapped to `false` by mask have a logit equal to 
+have the length of the action vector. Actions mapped to `false` by mask have a logit equal to
 `-Inf` and/or a zero-probability of being sampled.
 
 - `rng::AbstractRNG=Random.default_rng()`
-- `is_sampling::Bool=false`, whether to sample from the obtained normal categorical distribution (returns a Flux.OneHotArray `z`). 
+- `is_sampling::Bool=false`, whether to sample from the obtained normal categorical distribution (returns a Flux.OneHotArray `z`).
 - `is_return_log_prob::Bool=false`, whether to return the *logits* (i.e. the unnormalized logprobabilities) of getting the sampled actions in the given state.
 Only applies if `is_sampling` is true and will return `z, logits`.
 
@@ -423,7 +428,7 @@ function (model::CategoricalNetwork)(rng::AbstractRNG, state::AbstractArray; is_
 end
 
 function sample_categorical(rng, logits::AbstractArray)
-    ignore_derivatives() do 
+    ignore_derivatives() do
         log_probs = reshape(logsoftmax(logits, dims = 1), size(logits,1), :) # work in 2D
         gumbels = -log.(-log.(rand(rng, size(log_probs)...))) .+ log_probs # Gumbel-Max trick
         z = getindex.(argmax(gumbels, dims = 1), 1)
@@ -438,22 +443,22 @@ end
 """
     (model::CategoricalNetwork)([rng::AbstractRNG,] state::AbstractArray{<:Any, 3}, [mask::AbstractArray{Bool},] action_samples::Int)
 
-Sample `action_samples` actions from each state. Returns a 3D tensor with dimensions `(action_size x action_samples x batchsize)`. 
+Sample `action_samples` actions from each state. Returns a 3D tensor with dimensions `(action_size x action_samples x batchsize)`.
 Always returns the *logits* of each action along in a tensor with the same dimensions. The optional argument `mask` must be
 an Array of `Bool` with the same size as `state` expect for the first dimension that must
-have the length of the action vector. Actions mapped to `false` by mask have a logit equal to 
+have the length of the action vector. Actions mapped to `false` by mask have a logit equal to
 `-Inf` and/or a zero-probability of being sampled.
 """
 function (model::CategoricalNetwork)(rng::AbstractRNG, state::AbstractArray{<:Any, 3}, action_samples::Int)
-    logits = model.model(state) #da x 1 x batchsize 
-    z = ignore_derivatives() do 
+    logits = model.model(state) #da x 1 x batchsize
+    z = ignore_derivatives() do
         batchsize = size(state, 3) #3
         da = size(logits, 1)
         log_probs = logsoftmax(logits, dims = 1)
         gumbels = -log.(-log.(rand(rng, da, action_samples, batchsize))) .+ log_probs # Gumbel-Max trick
         z = getindex.(argmax(gumbels, dims = 1), 1)
         reshape(onehotbatch(z, 1:size(logits,1)), size(gumbels)...) # reshape to 3D due to onehotbatch behavior
-    end   
+    end
     return z, reduce(hcat, Iterators.repeated(logits, action_samples))
 end
 
@@ -479,16 +484,16 @@ function (model::CategoricalNetwork)(rng::AbstractRNG, state::AbstractArray, mas
 end
 
 function (model::CategoricalNetwork)(rng::AbstractRNG, state::AbstractArray{<:Any, 3}, mask::AbstractArray{Bool, 3}, action_samples::Int)
-    logits = model.model(state) #da x 1 x batchsize 
+    logits = model.model(state) #da x 1 x batchsize
     logits .+= ifelse.(mask, 0f0, typemin(eltype(logits)))
-    z = ignore_derivatives() do 
+    z = ignore_derivatives() do
         batchsize = size(state, 3) #3
         da = size(logits, 1)
         log_probs = logsoftmax(logits, dims = 1)
         gumbels = -log.(-log.(rand(rng, da, action_samples, batchsize))) .+ log_probs # Gumbel-Max trick
         z = getindex.(argmax(gumbels, dims = 1), 1)
         reshape(onehotbatch(z, 1:size(logits,1)), size(gumbels)...) # reshape to 3D due to onehotbatch behavior
-    end   
+    end
     return z, reduce(hcat, Iterators.repeated(logits, action_samples))
 end
 
@@ -504,7 +509,7 @@ export DuelingNetwork
 
 """
     DuelingNetwork(;base, val, adv)
-    
+
 Dueling network automatically produces separate estimates of the state value function network and advantage function network. The expected output size of val is 1, and adv is the size of the action space.
 """
 Base.@kwdef struct DuelingNetwork{B,V,A}
@@ -522,7 +527,7 @@ function (m::DuelingNetwork)(state)
 end
 
 #####
-# PerturbationNetwork 
+# PerturbationNetwork
 #####
 
 export PerturbationNetwork
