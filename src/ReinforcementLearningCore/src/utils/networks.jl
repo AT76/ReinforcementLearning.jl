@@ -17,12 +17,7 @@ Base.@kwdef struct ActorCritic{A,C}
     critic::C
 end
 
-Flux.@layer ActorCritic
-
-function RLBase.optimise!(AC::FluxApproximator{<:ActorCritic}, grad:: NamedTuple)
-    Flux.Optimise.update!(AC.optimiser_state.actor, AC.model.actor, grad.model.actor)
-    Flux.Optimise.update!(AC.optimiser_state.critic, AC.model.critic, grad.model.critic)
-end
+Flux.@layer ActorCritic trainable=(actor, critic)
 
 #####
 # GaussianNetwork
